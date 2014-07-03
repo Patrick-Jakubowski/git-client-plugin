@@ -71,6 +71,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -99,6 +100,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
     String gitExe;
     EnvVars environment;
     private Map<String, StandardCredentials> credentials = new HashMap<String, StandardCredentials>();
+    private Map<String, Pattern> urlPattern = new HashMap<String,Pattern>();
     private StandardCredentials defaultCredentials;
 
     // AABBCCDD where AA=major, BB=minor, CC=rev, DD=bugfix
@@ -241,7 +243,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
                 if (isAtLeastVersion(1,7,1,0))
                     args.add("--progress");
 
-                StandardCredentials cred = credentials.get(url.toPrivateString());
+                StandardCredentials cred = getCredentials(url.toPrivateString());
                 if (cred == null) cred = defaultCredentials;
                 args.add(url);
 
@@ -284,7 +286,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
                     args.add(rs.toString());
 
 
-        StandardCredentials cred = credentials.get(url);
+        StandardCredentials cred = getCredentials(url);
         if (cred == null) cred = defaultCredentials;
         launchCommandWithCredentials(args, workspace, cred, url);
     }
@@ -1375,7 +1377,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
                     args.add("-f");
                 }
 
-                StandardCredentials cred = credentials.get(remote.toPrivateString());
+                StandardCredentials cred = getCredentials(remote.toPrivateString());
                 if (cred == null) cred = defaultCredentials;
                 launchCommandWithCredentials(args, workspace, cred, remote, timeout);
                 // Ignore output for now as there's many different formats
@@ -1690,11 +1692,42 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
     }
 
     public void addCredentials(String url, StandardCredentials credentials) {
+        final Pattern p = Pattern.compile("\\$\\{[^{}]+\\}");
+        Matcher m = p.matcher(url);
+        if (m.find()) {
+            StringBuffer sb = new StringBuffer(url.length() + 16);
+            int beginIndex = 0;
+            do {
+                if (beginIndex != m.start()) {
+                    sb.append(Pattern.quote(url.substring(beginIndex, m.start()))).append("(.+)");
+                }
+                beginIndex = m.end();
+            } while(m.find());
+            String rest = url.substring(beginIndex);
+            if (!rest.isEmpty()) {
+                sb.append(Pattern.quote(rest));
+            }
+            this.urlPattern.put(url, Pattern.compile(sb.toString()));
+        }
         this.credentials.put(url, credentials);
     }
 
     public void clearCredentials() {
         this.credentials.clear();
+        this.urlPattern.clear();
+     }
+ 
+     public StandardCredentials getCredentials(String url) {
+        StandardCredentials cred = this.credentials.get(url);
+        if (cred==null) {
+            for (Entry<String,Pattern> patternEntry : this.urlPattern.entrySet()) {
+                if (patternEntry.getValue().matcher(url).matches()) {
+                    cred = this.credentials.get(patternEntry.getKey());
+                    break;
+                }
+            }
+        }
+        return cred;
     }
 
     public void addDefaultCredentials(StandardCredentials credentials) {
@@ -1761,7 +1794,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
         args.add("-h");
         args.add(url);
 
-        StandardCredentials cred = credentials.get(url);
+        StandardCredentials cred = getCredentials(url);
         if (cred == null) cred = defaultCredentials;
 
         String result = launchCommandWithCredentials(args, null, cred, url);
@@ -1780,7 +1813,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
         ArgumentListBuilder args = new ArgumentListBuilder("ls-remote");
         args.add("-h");
 
-        StandardCredentials cred = credentials.get(url);
+        StandardCredentials cred = getCredentials(url);
         if (cred == null) cred = defaultCredentials;
 
         args.add(url);
@@ -1812,7 +1845,7 @@ public class CliGitAPIImpl extends LegacyCompatibleGitAPIImpl {
         ArgumentListBuilder args = new ArgumentListBuilder();
         URIish uri = repository.getURIs().get(0);
         String url = uri.toPrivateString();
-        StandardCredentials cred = credentials.get(url);
+        StandardCredentials cred = getCredentials(url);
         if (cred == null) cred = defaultCredentials;
 
         args.add("push", url);
